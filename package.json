@@ -3,11 +3,7 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-<<<<<<< HEAD
      "start": "node server.js",
-=======
-    "start": "node server.js",
->>>>>>> 380fda679e8d57042352bd73e6657cc078cc336b
      "dev": "nodemon server.js"
   },
   "keywords": [],
