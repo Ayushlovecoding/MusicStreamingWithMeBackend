@@ -1,3 +1,5 @@
+// server.js - UPDATED CORS configuration
+
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
@@ -6,11 +8,17 @@ const jwt = require("jsonwebtoken");
 require("dotenv").config();
 
 const app = express();
-// configure CORS with a whitelist driven from env (comma-separated)
-const allowedOrigins ='https://musicstreamingbyayush-sharma.netlify.app';
+
+// ✅ FIXED: Updated CORS to allow Netlify frontend
+const allowedOrigins = [
+  'https://musicstreamingbyayush-sharma.netlify.app',
+  'http://localhost:5173', // for local development
+  'http://localhost:3000'
+];
+
 const corsOptions = {
   origin: function(origin, callback){
-    // allow requests with no origin (mobile apps, curl, server-to-server)
+    // Allow requests with no origin (mobile apps, curl, server-to-server)
     if(!origin) return callback(null, true);
     if(allowedOrigins.indexOf(origin) !== -1){
       callback(null, true);
@@ -18,102 +26,166 @@ const corsOptions = {
       callback(new Error('Not allowed by CORS: ' + origin));
     }
   },
+  credentials: true,
   optionsSuccessStatus: 200,
 }
 
 app.use(cors(corsOptions));
-// Note: registering a route with the literal path '*' (app.options('*', ...)) can
-// cause path-to-regexp to attempt to parse '*' as a parameter in some router
-// versions, leading to `PathError: Missing parameter name at index 1: *`.
-// The global CORS middleware above already handles preflight requests, so we
-// avoid registering an explicit '*' options route which prevents the PathError.
 app.use(express.json());
 
 // JioSaavn proxy routes
 const jiosaavnRouter = require('./routes/jiosaavnRoutes');
 app.use('/api/jiosaavn', jiosaavnRouter);
 
-// Connect to MongoDB
-mongoose.connect(process.env.MONGO_URI)
-  .then(() => console.log("✅ MongoDB Connected"))
-  .catch(err => console.error("❌ Error:", err));
+// ... rest of your server.js code
+import { createContext, useEffect, useRef, useState } from "react";
+import { songsData } from "../assets/frontend-assets/assets";
+import API_BASE_URL from '../config/api';
 
-// User Schema
-const userSchema = new mongoose.Schema({
-  name: String,
-  email: { type: String, unique: true },
-  password: String
-});
-const User = mongoose.model("User", userSchema);
+export const PlayerContext = createContext();
 
-// Test route for root
-app.get("/", (req, res) => {
-  res.send("✅ Backend is running fine!");
-});
+const PlayerContextProvider = (props) => {
+  const audioRef = useRef();
+  const seekBg = useRef();
+  const seekBar = useRef();
 
-// 🔹 Auth Middleware
-function auth(req, res, next) {
-  const token = req.header("Authorization")?.split(" ")[1]; // Expect "Bearer <token>"
-  if (!token) return res.status(401).json({ message: "No token, authorization denied" });
+  const [track, setTrack] = useState(songsData[0]);
+  const [playStatus, setPlayStatus] = useState(false);
+  const [time, setTime] = useState({
+    currentTime: { second: 0, minute: 0 },
+    totalTime: { second: 0, minute: 0 },
+  });
 
-  try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = decoded; // attach decoded user info
-    next();
-  } catch (err) {
-    res.status(401).json({ message: "Invalid token" });
-  }
-}
+  const playWithId = async (id) => {
+    const song = songsData.find((item) => item.id === id);
+    if (song) {
+      setTrack(song);
+      await audioRef.current.play();
+      setPlayStatus(true);
+    }
+  };
 
-// Register API
-app.post("/api/register", async (req, res) => {
-  try {
-    const { name, email, password } = req.body;
+  // ✅ FIXED: Play remote song with correct proxy URL
+  const playRemote = async (songInfo) => {
+    try {
+      console.log('Playing remote song:', songInfo);
 
-    // check if user already exists
-    const exist = await User.findOne({ email });
-    if (exist) return res.status(400).json({ message: "User already exists" });
+      const remoteTrack = {
+        id: 'remote-' + Date.now(),
+        name: songInfo.name || 'Unknown Song',
+        desc: songInfo.artist || 'Unknown Artist',
+        image: songInfo.image || '/placeholder-album.png',
+        file: songInfo.streamUrl,
+        source: 'remote'
+      };
 
-    // hash password
-    const hashed = await bcrypt.hash(password, 10);
+      setTrack(remoteTrack);
+      audioRef.current.pause();
+      
+      // Try direct URL first
+      audioRef.current.src = songInfo.streamUrl;
+      audioRef.current.crossOrigin = 'anonymous';
+      
+      try {
+        await audioRef.current.play();
+        setPlayStatus(true);
+      } catch (error) {
+        console.log('Direct play failed, trying proxy...');
+        
+        // ✅ FIXED: Use correct backend URL for proxy
+        const proxyUrl = `${API_BASE_URL}/api/jiosaavn/stream?url=${encodeURIComponent(songInfo.streamUrl)}`;
+        audioRef.current.src = proxyUrl;
+        
+        await audioRef.current.play();
+        setPlayStatus(true);
+      }
+      
+    } catch (error) {
+      console.error('Failed to play remote song:', error);
+      alert('Failed to play this song. Please try another one.');
+    }
+  };
 
-    const newUser = new User({ name, email, password: hashed });
-    await newUser.save();
+  const play = () => {
+    audioRef.current.play();
+    setPlayStatus(true);
+  };
 
-    res.json({ message: "✅ User registered successfully!" });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
+  const pause = () => {
+    audioRef.current.pause();
+    setPlayStatus(false);
+  };
 
-// Login API
-app.post("/api/login", async (req, res) => {
-  try {
-    const { email, password } = req.body;
+  const previous = async () => {
+    if (track.id > 0) {
+      await playWithId(track.id - 1);
+    }
+  };
 
-    const user = await User.findOne({ email });
-    if (!user) return res.status(400).json({ message: "User not found" });
+  const next = async () => {
+    if (track.id < songsData.length - 1) {
+      await playWithId(track.id + 1);
+    }
+  };
 
-    const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) return res.status(400).json({ message: "Invalid password" });
+  const seekSong = async (e) => {
+    const seekPosition = (e.nativeEvent.offsetX / seekBg.current.offsetWidth) * audioRef.current.duration;
+    audioRef.current.currentTime = seekPosition;
+  };
 
-    // create JWT token
-    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET);
+  useEffect(() => {
+    const audio = audioRef.current;
+    
+    const updateTime = () => {
+      if (audio.duration) {
+        seekBar.current.style.width = Math.floor((audio.currentTime / audio.duration) * 100) + "%";
+        
+        setTime({
+          currentTime: {
+            second: Math.floor(audio.currentTime % 60),
+            minute: Math.floor(audio.currentTime / 60),
+          },
+          totalTime: {
+            second: Math.floor(audio.duration % 60),
+            minute: Math.floor(audio.duration / 60),
+          },
+        });
+      }
+    };
 
-    res.json({
-      token,
-      user: { id: user._id, name: user.name, email: user.email }
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
+    audio.addEventListener('timeupdate', updateTime);
+    audio.addEventListener('loadedmetadata', updateTime);
 
-// 🔹 Example Protected Route
-app.get("/api/protected", auth, (req, res) => {
-  res.json({ message: "✅ You are authorized!", user: req.user });
-});
+    return () => {
+      audio.removeEventListener('timeupdate', updateTime);
+      audio.removeEventListener('loadedmetadata', updateTime);
+    };
+  }, []);
 
-// Start server
-const PORT = 5000;
-app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+  const contextValue = {
+    audioRef,
+    seekBar,
+    seekBg,
+    track,
+    setTrack,
+    playStatus,
+    setPlayStatus,
+    time,
+    setTime,
+    play,
+    pause,
+    playWithId,
+    playRemote,
+    previous,
+    next,
+    seekSong,
+  };
+
+  return (
+    <PlayerContext.Provider value={contextValue}>
+      {props.children}
+    </PlayerContext.Provider>
+  );
+};
+
+export default PlayerContextProvider;
