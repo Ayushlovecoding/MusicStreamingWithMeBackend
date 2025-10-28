@@ -7,7 +7,7 @@ require("dotenv").config();
 
 const app = express();
 // configure CORS with a whitelist driven from env (comma-separated)
-const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:5173,https://musicwithfullstack1.netlify.app').split(',').map(s=>s.trim()).filter(Boolean);
+const allowedOrigins ='https://musicstreamingbyayush-sharma.netlify.app';
 const corsOptions = {
   origin: function(origin, callback){
     // allow requests with no origin (mobile apps, curl, server-to-server)
