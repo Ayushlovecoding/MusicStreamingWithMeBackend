@@ -1,4 +1,4 @@
-// server.js - UPDATED CORS configuration
+// server.js - Backend Server with All Features
 
 const express = require("express");
 const mongoose = require("mongoose");
@@ -9,7 +9,7 @@ require("dotenv").config();
 
 const app = express();
 
-// ✅ FIXED: Updated CORS to allow Netlify frontend
+// ✅ CORS configuration - Allows Netlify frontend
 const allowedOrigins = [
   'https://musicstreamingbyayush-sharma.netlify.app',
   'http://localhost:5173', // for local development
@@ -33,159 +33,224 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.use(express.json());
 
-// JioSaavn proxy routes
+// MongoDB Connection
+mongoose.connect(process.env.MONGO_URI)
+  .then(() => console.log('✅ MongoDB Connected Successfully'))
+  .catch((err) => console.error('❌ MongoDB connection error:', err));
+
+// User Schema
+const userSchema = new mongoose.Schema({
+  name: { type: String, required: true },
+  email: { type: String, required: true, unique: true },
+  password: { type: String, required: true },
+  createdAt: { type: Date, default: Date.now }
+});
+
+const User = mongoose.model('User', userSchema);
+
+// ✅ JioSaavn proxy routes (Music streaming API)
 const jiosaavnRouter = require('./routes/jiosaavnRoutes');
 app.use('/api/jiosaavn', jiosaavnRouter);
 
-// ... rest of your server.js code
-import { createContext, useEffect, useRef, useState } from "react";
-import { songsData } from "../assets/frontend-assets/assets";
-import API_BASE_URL from '../config/api';
-
-export const PlayerContext = createContext();
-
-const PlayerContextProvider = (props) => {
-  const audioRef = useRef();
-  const seekBg = useRef();
-  const seekBar = useRef();
-
-  const [track, setTrack] = useState(songsData[0]);
-  const [playStatus, setPlayStatus] = useState(false);
-  const [time, setTime] = useState({
-    currentTime: { second: 0, minute: 0 },
-    totalTime: { second: 0, minute: 0 },
-  });
-
-  const playWithId = async (id) => {
-    const song = songsData.find((item) => item.id === id);
-    if (song) {
-      setTrack(song);
-      await audioRef.current.play();
-      setPlayStatus(true);
-    }
-  };
-
-  // ✅ FIXED: Play remote song with correct proxy URL
-  const playRemote = async (songInfo) => {
-    try {
-      console.log('Playing remote song:', songInfo);
-
-      const remoteTrack = {
-        id: 'remote-' + Date.now(),
-        name: songInfo.name || 'Unknown Song',
-        desc: songInfo.artist || 'Unknown Artist',
-        image: songInfo.image || '/placeholder-album.png',
-        file: songInfo.streamUrl,
-        source: 'remote'
-      };
-
-      setTrack(remoteTrack);
-      audioRef.current.pause();
-      
-      // Try direct URL first
-      audioRef.current.src = songInfo.streamUrl;
-      audioRef.current.crossOrigin = 'anonymous';
-      
-      try {
-        await audioRef.current.play();
-        setPlayStatus(true);
-      } catch (error) {
-        console.log('Direct play failed, trying proxy...');
-        
-        // ✅ FIXED: Use correct backend URL for proxy
-        const proxyUrl = `${API_BASE_URL}/api/jiosaavn/stream?url=${encodeURIComponent(songInfo.streamUrl)}`;
-        audioRef.current.src = proxyUrl;
-        
-        await audioRef.current.play();
-        setPlayStatus(true);
-      }
-      
-    } catch (error) {
-      console.error('Failed to play remote song:', error);
-      alert('Failed to play this song. Please try another one.');
-    }
-  };
-
-  const play = () => {
-    audioRef.current.play();
-    setPlayStatus(true);
-  };
-
-  const pause = () => {
-    audioRef.current.pause();
-    setPlayStatus(false);
-  };
-
-  const previous = async () => {
-    if (track.id > 0) {
-      await playWithId(track.id - 1);
-    }
-  };
-
-  const next = async () => {
-    if (track.id < songsData.length - 1) {
-      await playWithId(track.id + 1);
-    }
-  };
-
-  const seekSong = async (e) => {
-    const seekPosition = (e.nativeEvent.offsetX / seekBg.current.offsetWidth) * audioRef.current.duration;
-    audioRef.current.currentTime = seekPosition;
-  };
-
-  useEffect(() => {
-    const audio = audioRef.current;
+// ✅ Authentication Middleware
+const authMiddleware = async (req, res, next) => {
+  try {
+    const token = req.header('Authorization')?.replace('Bearer ', '');
     
-    const updateTime = () => {
-      if (audio.duration) {
-        seekBar.current.style.width = Math.floor((audio.currentTime / audio.duration) * 100) + "%";
-        
-        setTime({
-          currentTime: {
-            second: Math.floor(audio.currentTime % 60),
-            minute: Math.floor(audio.currentTime / 60),
-          },
-          totalTime: {
-            second: Math.floor(audio.duration % 60),
-            minute: Math.floor(audio.duration / 60),
-          },
-        });
-      }
-    };
+    if (!token) {
+      return res.status(401).json({ message: 'No authentication token provided' });
+    }
 
-    audio.addEventListener('timeupdate', updateTime);
-    audio.addEventListener('loadedmetadata', updateTime);
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const user = await User.findById(decoded.userId).select('-password');
+    
+    if (!user) {
+      return res.status(401).json({ message: 'User not found' });
+    }
 
-    return () => {
-      audio.removeEventListener('timeupdate', updateTime);
-      audio.removeEventListener('loadedmetadata', updateTime);
-    };
-  }, []);
-
-  const contextValue = {
-    audioRef,
-    seekBar,
-    seekBg,
-    track,
-    setTrack,
-    playStatus,
-    setPlayStatus,
-    time,
-    setTime,
-    play,
-    pause,
-    playWithId,
-    playRemote,
-    previous,
-    next,
-    seekSong,
-  };
-
-  return (
-    <PlayerContext.Provider value={contextValue}>
-      {props.children}
-    </PlayerContext.Provider>
-  );
+    req.user = user;
+    next();
+  } catch (error) {
+    res.status(401).json({ message: 'Invalid or expired token' });
+  }
 };
 
-export default PlayerContextProvider;
+// ✅ Register Route
+app.post('/api/register', async (req, res) => {
+  try {
+    const { name, email, password } = req.body;
+
+    // Validation
+    if (!name || !email || !password) {
+      return res.status(400).json({ message: 'All fields are required' });
+    }
+
+    if (password.length < 6) {
+      return res.status(400).json({ message: 'Password must be at least 6 characters' });
+    }
+
+    // Check if user exists
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      return res.status(400).json({ message: 'User already exists with this email' });
+    }
+
+    // Hash password and create user
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const user = new User({ name, email, password: hashedPassword });
+    await user.save();
+
+    // Generate JWT token
+    const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, { expiresIn: '7d' });
+
+    res.status(201).json({
+      success: true,
+      message: 'User registered successfully',
+      token,
+      user: { 
+        id: user._id, 
+        name: user.name, 
+        email: user.email 
+      }
+    });
+  } catch (error) {
+    console.error('Register error:', error);
+    res.status(500).json({ message: 'Server error during registration', error: error.message });
+  }
+});
+
+// ✅ Login Route
+app.post('/api/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    // Validation
+    if (!email || !password) {
+      return res.status(400).json({ message: 'Email and password are required' });
+    }
+
+    // Find user
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res.status(401).json({ message: 'Invalid email or password' });
+    }
+
+    // Verify password
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      return res.status(401).json({ message: 'Invalid email or password' });
+    }
+
+    // Generate JWT token
+    const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, { expiresIn: '7d' });
+
+    res.json({
+      success: true,
+      message: 'Login successful',
+      token,
+      user: { 
+        id: user._id, 
+        name: user.name, 
+        email: user.email 
+      }
+    });
+  } catch (error) {
+    console.error('Login error:', error);
+    res.status(500).json({ message: 'Server error during login', error: error.message });
+  }
+});
+
+// ✅ Get Current User (Protected Route)
+app.get('/api/me', authMiddleware, async (req, res) => {
+  try {
+    res.json({
+      success: true,
+      user: {
+        id: req.user._id,
+        name: req.user.name,
+        email: req.user.email,
+        createdAt: req.user.createdAt
+      }
+    });
+  } catch (error) {
+    console.error('Get user error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// ✅ Update User Profile (Protected Route)
+app.put('/api/me', authMiddleware, async (req, res) => {
+  try {
+    const { name } = req.body;
+
+    if (!name) {
+      return res.status(400).json({ message: 'Name is required' });
+    }
+
+    const user = await User.findByIdAndUpdate(
+      req.user._id,
+      { name },
+      { new: true }
+    ).select('-password');
+
+    res.json({
+      success: true,
+      message: 'Profile updated successfully',
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email
+      }
+    });
+  } catch (error) {
+    console.error('Update user error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// ✅ Health Check Route
+app.get('/api/health', (req, res) => {
+  res.json({ 
+    status: 'ok', 
+    message: 'Music Backend Server is running',
+    timestamp: new Date().toISOString()
+  });
+});
+
+// ✅ Root Route
+app.get('/', (req, res) => {
+  res.json({
+    message: 'Music Streaming Backend API',
+    version: '1.0.0',
+    endpoints: {
+      auth: ['/api/register', '/api/login', '/api/me'],
+      music: ['/api/jiosaavn/*'],
+      health: '/api/health'
+    }
+  });
+});
+
+// ✅ 404 Handler
+app.use((req, res) => {
+  res.status(404).json({ 
+    message: 'Route not found',
+    path: req.path 
+  });
+});
+
+// ✅ Error Handler
+app.use((err, req, res, next) => {
+  console.error('Server error:', err);
+  res.status(500).json({ 
+    message: 'Internal server error',
+    error: process.env.NODE_ENV === 'development' ? err.message : undefined
+  });
+});
+
+// ✅ Start Server
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`📡 Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`🎵 Music API ready at http://localhost:${PORT}/api/jiosaavn`);
+});
